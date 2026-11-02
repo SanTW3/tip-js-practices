@@ -1,39 +1,36 @@
 # Практическая работа № 5. Асинхронные операции и получение данных с сервера
 
-## Данные работы
-
-| Поле | Значение |
-|---|---|
-| Имя | Резвухин Георгий Владиславович |
-| Группа | ЭФБО-17-25 |
-| Вариант | 5 — фильтр `{ categoryId: 1 }` |
-| Node.js | v24.14.1 (npm 11.11.0) |
-| Операционная система | macOS 27 |
+Резвухин Георгий, ЭФБО-17-25, вариант 5 (`{ categoryId: 1 }`).
+Node.js v24.14.1, npm 11.11.0, macOS.
 
 ## Запуск
 
-Рабочая папка: `practice-05`. Зависимости не нужны.
+Из папки `practice-05`, в первом терминале:
 
 ```bash
 npm start
 ```
 
-Во втором терминале:
+Во втором:
 
 ```bash
 npm run client
 npm test
 ```
 
-API: `http://127.0.0.1:5505/api`. Интеграционные проверки сами поднимают API на свободном порту.
+API: `http://127.0.0.1:5505/api`.
 
-## Эксперимент с очередями выполнения
+## Что сделано
 
-Файл `examples/event-loop.js`, команда `npm run example:order`.
+- `src/api-client.js` — `buildUrl` и `createApiClient` с методом `requestJson`. Делает GET, ставит тайм-аут, проверяет `response.ok` и `Content-Type`, разбирает JSON. Все ошибки превращает в `ApiError` с полем `kind`: `http`, `network`, `invalid-response`, `timeout`, `aborted`.
+- `src/task-api.js` — `getTasks`, `getTaskById`, `getCategories`, `loadInitialData`. Проверяет фильтры до запроса и данные после ответа.
+- `src/variant.js` — вариант 5, фильтр `{ categoryId: 1 }`.
 
-**Прогноз до запуска:** A, B, C, D, E, F.
+## Порядок выполнения (event-loop)
 
-**Факт:**
+Мой прогноз: A, B, C, D, E, F.
+
+Результат:
 
 ```text
 A: синхронный код
@@ -44,118 +41,47 @@ E: продолжение после await
 F: задача таймера
 ```
 
-Объяснение: сначала выполняется весь синхронный код — A, затем B (async-функция до первого `await` работает синхронно), затем C. После этого очередь микрозадач: D (её `then` поставлен в очередь раньше) и E (продолжение после `await null`). Таймер `setTimeout(..., 0)` — это задача, она выполняется только после всех микрозадач, поэтому F последняя.
+Сначала идёт синхронный код (A, B, C), потом микрозадачи Promise (D, E), а таймер — в самом конце (F). Добавил свой `Promise.resolve().then(...)` с меткой G — он вывелся после E и до F.
 
-**Собственный обработчик.** После вызова `demonstrateAwait()` добавлен `Promise.resolve().then(() => log("G: ..."))`. Прогноз: G после E, но до F. Факт: `A, B, C, D, E, G, F` — микрозадачи выполняются в порядке постановки в очередь (D, E, G), таймер всё равно последний.
+## Запросы к API
 
-## Наблюдение за HTTP-ответом
-
-| Запрос | Статус | Content-Type | Тело | `response.ok` |
-|---|---|---|---|---|
-| `/api/health` | 200 | `application/json; charset=utf-8` | `{"data":{"status":"ok"}}` | true |
-| `/api/tasks` | 200 | `application/json; charset=utf-8` | `{ data: [12 задач], meta: { total: 12, filters } }` | true |
-| `/api/tasks?completed=false&priority=high` | 200 | `application/json; charset=utf-8` | id `[4, 13, 34]`, `meta.total = 3` | true |
-| `/api/tasks/25` | 200 | `application/json; charset=utf-8` | `{ data: { id: 25, "Исправить обработку ошибок", ... } }` | true |
-| `/api/tasks/999` | 404 | `application/json; charset=utf-8` | `{ error: { code: "TASK_NOT_FOUND", message, details: { id: 999 } } }` | false |
-| `/api/categories` | 200 | `application/json; charset=utf-8` | 3 категории: Учёба, Проект, Организация | true |
-
-Вывод `npm run example:fetch`: `status: 200`, `ok: true`, `ids: [ 4, 13, 34 ]`, `meta.total: 3`. Важно: для 404 `fetch` не выбрасывает исключение — ответ получен, просто `ok = false`.
-
-## Организация кода
-
-| Файл | Ответственность |
-|---|---|
-| `src/api-client.js` | Транспорт: `buildUrl`, `createApiClient` → `requestJson`. GET, `Accept: application/json`, тайм-аут, отмена, проверка `response.ok` и `Content-Type`, разбор JSON, единый `ApiError`. О задачах ничего не знает. |
-| `src/task-api.js` | Предметная часть: маршруты `/tasks`, `/tasks/:id`, `/categories`, проверка фильтров до запроса и схемы данных после него, `loadInitialData` через `Promise.all`. |
-| `src/variant.js` | Номер варианта и фильтры. |
-| `src/main.js` | Консольный сценарий. |
-
-## Реализация общего клиента
-
-`buildUrl`: проверяет `baseUrl` (абсолютный, http/https, без query и hash), убирает лишние `/` на стыке, добавляет параметры через `url.searchParams.set`, пропуская только `undefined`, `null` и `""` (`false` и `0` остаются).
-
-`requestJson`:
-1. строит URL через `buildUrl`;
-2. создаёт `AbortSignal.timeout(limit)`, при внешнем сигнале объединяет их через `AbortSignal.any`;
-3. в отдельном `try` вызывает `fetchFn` — ошибки здесь означают, что ответа нет: `aborted` (отменил вызывающий код), `timeout` (сработал тайм-аут) или `network`;
-4. проверяет, что получен `Response`;
-5. если `!response.ok` — пытается прочитать `payload.error` и бросает `ApiError` вида `http` со `status`, `code`, `details`;
-6. для `204` возвращает `null`;
-7. проверяет, что `Content-Type` — JSON, затем разбирает тело; повреждённый JSON → `invalid-response`.
-
-## Классификация ошибок
-
-| `kind` | Как получено | Факт |
+| Запрос | Статус | ok |
 |---|---|---|
-| `http` | `getTaskById(999)` | `status 404`, `code TASK_NOT_FOUND`, «Задача с id 999 не найдена.» |
-| `http` | `/debug/error` | `status 503`, `code SERVICE_UNAVAILABLE` |
-| `invalid-response` | `/debug/text` | «Ответ не является JSON: text/plain; charset=utf-8» |
-| `timeout` | `/debug/delay?ms=150`, `timeoutMs: 20` | «Превышено время ожидания ответа (20 мс).» |
-| `aborted` | `/debug/delay?ms=150` + `controller.abort()` | «Запрос отменён.» |
-| `network` | `npm run client` при остановленном API | «Сервер недоступен: ответ не получен.» |
+| `/api/health` | 200 | true |
+| `/api/tasks` | 200 | true (12 задач) |
+| `/api/tasks?completed=false&priority=high` | 200 | true (id 4, 13, 34) |
+| `/api/tasks/25` | 200 | true |
+| `/api/tasks/999` | 404 | false |
+| `/api/categories` | 200 | true (3 категории) |
 
-После повторного запуска API `npm run client` снова вернул 3 задачи — клиент не «запоминает» сбой.
+Везде `Content-Type: application/json`. На 404 `fetch` ошибку не выбрасывает, поэтому `ok` проверяю сам.
 
-## Доменный модуль задач
+## Ошибки
 
-- `getTasks(filters)`: разрешены только `completed` (boolean), `priority` (low/medium/high), `categoryId` (положительное целое), `q` (строка до 100 после `trim`). Неверный фильтр — `TypeError` ещё до запроса. После ответа проверяется каждая задача, уникальность id и `meta.total === data.length`.
-- `getTaskById(id)`: проверка id, запрос `/tasks/:id`, проверка схемы одной задачи.
-- `getCategories()`: запрос `/categories`, проверка схемы и уникальности id.
-- Неверная схема превращается в `ApiError` с `kind: "invalid-response"`.
+| Случай | kind |
+|---|---|
+| `getTaskById(999)` | `http`, 404, `TASK_NOT_FOUND` |
+| `/debug/error` | `http`, 503 |
+| `/debug/text` | `invalid-response` |
+| задержка 150 мс при тайм-ауте 20 мс | `timeout` |
+| отмена через `AbortController` | `aborted` |
+| API выключен | `network` |
 
-## Последовательная и параллельная загрузка
+После повторного запуска API клиент снова работает.
 
-Два запроса `/debug/delay?ms=300`:
+## Последовательно и параллельно
 
-| Прогон | Последовательно | `Promise.all` |
-|---:|---:|---:|
-| 1 | 612 мс | 306 мс |
-| 2 | 610 мс | 306 мс |
-| 3 | 609 мс | 306 мс |
+Два запроса по 300 мс: последовательно ~610 мс, через `Promise.all` ~306 мс (три прогона). Поэтому `loadInitialData` запускает задачи и категории одновременно.
 
-Последовательно время складывается (~2 × 300), параллельно — равно самому долгому запросу (~300). Поэтому `loadInitialData` сначала запускает оба запроса, а потом ждёт их вместе через `Promise.all`.
+## Общий сценарий и вариант
 
-## Общий контрольный сценарий
+`node kr-task3.js` (фильтры `completed: false, priority: "high"`): id `[4, 13, 34]`, `meta.total: 3`.
 
-Фильтры `{ completed: false, priority: "high" }` (`node kr-task3.js`):
+`node kr-task4.js`: ошибка поймана в `catch`, `kind: http`, `status: 404`.
 
-```text
-Фильтры: { completed: false, priority: "high" }
-id задач: [ 4, 13, 34 ]
-meta.total: 3
-```
+`npm run client` (вариант 5, URL `.../api/tasks?categoryId=1`): задачи 1, 7, 13, всего 3 — совпадает с таблицей.
 
-Ошибка задачи 999 (`node kr-task4.js`):
-
-```text
-Ошибка перехвачена в catch
-kind: http
-status: 404
-code: TASK_NOT_FOUND
-message: Задача с id 999 не найдена.
-```
-
-Совпадает с ожиданием методички.
-
-## Индивидуальный вариант
-
-`src/variant.js`: `variantNumber = 5`, `variantFilters = { categoryId: 1 }`. Сформированный URL: `http://127.0.0.1:5505/api/tasks?categoryId=1`.
-
-Вывод `npm run client`:
-
-```text
-Индивидуальный вариант 5
-Фильтры: { completed: null, priority: null, categoryId: 1, q: '' }
-Получено задач: 3; время: 37.9 мс
-id 1  'Изучить функции'           true   medium  Учёба
-id 7  'Проверить методы массивов' false  low     Учёба
-id 13 'Разобрать Promise'         false  high    Учёба
-Контрольная ошибка 404: Тип: http · Задача с id 999 не найдена. · HTTP 404 · Код API: TASK_NOT_FOUND
-```
-
-Ожидалось `[1, 7, 13]`, `meta.total = 3` — совпало. Фильтр `categoryId: 1` отбирает задачи категории «Учёба»; остальные фильтры не переданы, поэтому сервер вернул их как `null` / `""`.
-
-## Протокол проверки API
+## Проверки
 
 ```text
 OK: 01. health возвращает состояние API и обязательные заголовки
@@ -178,8 +104,6 @@ OK: 17. неизвестный маршрут даёт ошибку 404
 OK: 18. отладочные маршруты воспроизводят 503, не-JSON и задержку
 Итог API: успешно 18, ошибок 0.
 ```
-
-## Протокол модульных проверок клиента
 
 ```text
 OK: 01. buildUrl соединяет baseUrl и путь без двойного слеша
@@ -211,8 +135,6 @@ OK: 26. loadInitialData передаёт отказ одного из запро
 Итог клиента: успешно 26, ошибок 0.
 ```
 
-## Протокол интеграционных проверок
-
 ```text
 OK: 01. клиент получает полный список от реального API
 OK: 02. логические false и несколько фильтров доходят до API
@@ -230,23 +152,14 @@ OK: 13. внешний AbortController отменяет реальный зап�
 Итог интеграции: успешно 13, ошибок 0.
 ```
 
-## Собственные проверки
+## Свои проверки
 
-| № | Проверка | Ожидание | Факт | Итог |
-|---:|---|---|---|---|
-| 1 | **Комбинация query.** `getTasks({ completed: false, categoryId: 2, q: "  API  " })` | Пробелы в `q` обрезаны, сервер применил три фильтра. | id `[28]`, `meta.total = 1`, `filters: {"completed":false,"priority":null,"categoryId":2,"q":"API"}` | Пройдено |
-| 2 | **Ошибочный HTTP.** `requestJson("/debug/error")` | `kind: http`, статус 503, код из тела ответа. | `http 503 SERVICE_UNAVAILABLE` «Учебная имитация временной недоступности сервиса.» | Пройдено |
-| 3 | **Граница тайм-аута.** `/debug/delay?ms=150` при `timeoutMs: 300` | Ответ успевает, ошибки нет. | `{"data":{"delayedMs":150}}` | Пройдено |
-| 4 | **Вариант.** `getTasks({ categoryId: 1 })` | `[1, 7, 13]`, total 3. | `[1, 7, 13]`, total 3. | Пройдено |
-
-## Отладка
-
-Точка останова на `src/api-client.js:115` (`if (!response.ok)`) при вызове `getTaskById(999)`: `url = "http://127.0.0.1:5505/api/tasks/999"`, `response.status = 404`, `response.ok = false`. Далее разобран `payload.error` и брошен `ApiError { kind: "http", status: 404, code: "TASK_NOT_FOUND" }`, который попадает в `catch` вызывающего кода.
-
-## Дополнительное задание
-
-Дополнительное задание не выполнялось.
+| Проверка | Результат |
+|---|---|
+| `{ completed: false, categoryId: 2, q: "  API  " }` | задача 28, пробелы в `q` обрезаны |
+| `/debug/error` | `http`, 503 |
+| задержка 150 мс при тайм-ауте 300 мс | ответ успел, ошибки нет |
 
 ## Вывод
 
-Создан клиент учебного API из двух слоёв: общий `api-client.js` отвечает за HTTP (URL, тайм-аут, отмену, проверку статуса и формата, разбор JSON), а `task-api.js` — за маршруты задач и проверку данных. Все ошибки приводятся к одному типу `ApiError` с полем `kind`, поэтому вызывающий код различает HTTP-ошибку, отсутствие сети, неверный ответ, тайм-аут и отмену. Главное наблюдение: `fetch` не считает 404 ошибкой, поэтому клиент обязан сам проверять `response.ok`. Пройдены 18 + 26 + 13 проверок, общий сценарий и вариант 5 совпали с ожиданиями.
+Сделал клиент для API из двух частей: общий (HTTP и ошибки) и для задач (маршруты и проверка данных). Главное, что понял: `fetch` не считает 404 ошибкой, поэтому статус надо проверять самому, а разные виды ошибок полезно различать через `kind`.
