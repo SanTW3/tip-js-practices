@@ -3,17 +3,6 @@
 Резвухин Георгий, ЭФБО-17-25, вариант 5.
 Node.js v24.14.1, npm 11.11.0, macOS, браузер Firefox / Chrome.
 
-## Запуск
-
-Из папки `practice-04`:
-
-```bash
-npm test
-npm start
-```
-
-Приложение: `http://127.0.0.1:5504/`, свой вариант: `?dataset=variant`, проверки: `/checks.html`.
-
 ## Что сделано
 
 - Из ПР3 перенесены `data.js`, `task-selectors.js`, `task-service.js`, `task-view.js`.

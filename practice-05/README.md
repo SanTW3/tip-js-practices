@@ -3,23 +3,6 @@
 Резвухин Георгий, ЭФБО-17-25, вариант 5 (`{ categoryId: 1 }`).
 Node.js v24.14.1, npm 11.11.0, macOS.
 
-## Запуск
-
-Из папки `practice-05`, в первом терминале:
-
-```bash
-npm start
-```
-
-Во втором:
-
-```bash
-npm run client
-npm test
-```
-
-API: `http://127.0.0.1:5505/api`.
-
 ## Что сделано
 
 - `src/api-client.js` — `buildUrl` и `createApiClient` с методом `requestJson`. Делает GET, ставит тайм-аут, проверяет `response.ok` и `Content-Type`, разбирает JSON. Все ошибки превращает в `ApiError` с полем `kind`: `http`, `network`, `invalid-response`, `timeout`, `aborted`.
